@@ -7,18 +7,20 @@
     android:layout_height="match_parent"
     tools:context=".MainActivity">
 
-   <TextureView
-       android:id="@+id/textureView"
+   <ImageView
+       android:id="@+id/imageV"
        android:layout_width="match_parent"
-       android:layout_height="match_parent"/>
+       android:layout_height="match_parent"
+       android:background="#FFF174"/>
 
     <Button
-        android:id="@+id/capture"
+        android:id="@+id/btn"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="@string/capture"
         android:layout_alignParentBottom="true"
         android:layout_centerHorizontal="true"
-        android:layout_marginBottom="20dp"/>
+        android:layout_marginBottom="20dp"
+        android:backgroundTint="#F44336"/>
 
 </RelativeLayout>

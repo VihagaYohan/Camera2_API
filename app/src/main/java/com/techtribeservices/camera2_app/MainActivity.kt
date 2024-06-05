@@ -2,39 +2,58 @@ package com.techtribeservices.camera2_app
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.ImageFormat
+import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.media.ImageReader
+import android.media.MediaMetadataRetriever.BitmapParams
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.HandlerThread
+import android.provider.MediaStore
 import android.view.Surface
 import android.view.TextureView
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.techtribeservices.camera2_app.ml.AutoModel1
+import org.tensorflow.lite.support.common.FileUtil
+import org.tensorflow.lite.support.image.ImageProcessor
+import org.tensorflow.lite.support.image.TensorImage
+import org.tensorflow.lite.support.image.ops.ResizeOp
 import java.io.File
 import java.io.FileOutputStream
 
 class MainActivity : AppCompatActivity() {
-    lateinit var capReq: CaptureRequest.Builder
-    lateinit var handler: Handler
-    lateinit var handlerThread: HandlerThread
-    lateinit var cameraManager: CameraManager
-    lateinit var textureView: TextureView
-    lateinit var cameraCaptureSession: CameraCaptureSession
-    lateinit var cameraDevice: CameraDevice
-    lateinit var captureRequest: CaptureRequest
-    lateinit var imageReader: ImageReader
+    val paint = Paint()
+    lateinit var imageView: ImageView
+    lateinit var button: Button
+    lateinit var bitmap: Bitmap
+    lateinit var model: AutoModel1
+    lateinit var labels: List<String>
+    val imageProcessor = ImageProcessor.Builder()
+        .add(ResizeOp(300,300,ResizeOp.ResizeMethod.BILINEAR))
+        .build()
+
+    var colors = listOf<Int>(
+        Color.BLUE,Color.GREEN, Color.RED, Color.CYAN, Color.GRAY,
+        Color.BLACK, Color.DKGRAY, Color.MAGENTA, Color.YELLOW, Color.RED
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,146 +64,77 @@ class MainActivity : AppCompatActivity() {
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
+        val intent = Intent()
+        intent.setType("image/*")
+        intent.setAction(Intent.ACTION_GET_CONTENT)
 
-        get_permission()
+        labels = FileUtil.loadLabels(this, "labels.txt")
+        model = AutoModel1.newInstance(this)
+        imageView = findViewById(R.id.imageV)
+        button = findViewById(R.id.btn)
 
-        textureView = findViewById(R.id.textureView)
-        cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        handlerThread = HandlerThread("videoThread")
-        handlerThread.start()
-        handler = Handler((handlerThread).looper)
-
-        textureView.surfaceTextureListener = object: TextureView.SurfaceTextureListener{
-            override fun onSurfaceTextureAvailable(
-                surface: SurfaceTexture,
-                width: Int,
-                height: Int,
-            ) {
-                open_camera()
-            }
-
-            override fun onSurfaceTextureSizeChanged(
-                surface: SurfaceTexture,
-                width: Int,
-                height: Int,
-            ) {
-                TODO("Not yet implemented")
-            }
-
-            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                return false;
-            }
-
-            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
-
-            }
-
-        }
-        imageReader = ImageReader.newInstance(1080, 1920, ImageFormat.JPEG, 1)
-        imageReader.setOnImageAvailableListener(object: ImageReader.OnImageAvailableListener{
-            override fun onImageAvailable(reader: ImageReader?) {
-                var image = reader?.acquireLatestImage()
-                var buffer = image!!.planes[0].buffer
-                var bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-
-                var file = File(getExternalFilesDir(Environment.DIRECTORY_PICTURES),"img.jpeg")
-                var opStream = FileOutputStream(file)
-
-                opStream.write(bytes)
-                opStream.close()
-
-                image.close()
-                Toast.makeText(this@MainActivity, "Image captured", Toast.LENGTH_SHORT).show()
-            }
-
-        },handler)
-
-        findViewById<Button>(R.id.capture).apply {
-            setOnClickListener {
-                capReq = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-                capReq.addTarget(imageReader.surface)
-                cameraCaptureSession.capture(capReq.build(),null,null)
-
-            }
+        button.setOnClickListener {
+            startActivityForResult(intent, 101)
         }
     }
 
-    fun get_permission() {
-        var permissionList = mutableListOf<String>()
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if(requestCode == 101) {
+            var uri = data?.data
+            bitmap = MediaStore.Images.Media.getBitmap(this.contentResolver,uri)
 
-        if(checkSelfPermission(android.Manifest.permission.CAMERA)
-            != PackageManager.PERMISSION_GRANTED)
-            permissionList.add(android.Manifest.permission.CAMERA)
-       if(checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-           != PackageManager.PERMISSION_GRANTED)
-           permissionList.add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-       if(checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-           != PackageManager.PERMISSION_GRANTED)
-           permissionList.add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-
-        if(permissionList.size > 0) {
-            requestPermissions(permissionList.toTypedArray(), 101)
+            get_prediction()
         }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        grantResults.forEach {
-            if(it != PackageManager.PERMISSION_GRANTED) {
-                get_permission()
+    fun get_prediction() {
+
+// Creates inputs for reference.
+        var image = TensorImage.fromBitmap(bitmap)
+        image = imageProcessor.process(image)
+
+// Runs model inference and gets result.
+        val outputs = model.process(image)
+        val locations = outputs.locationsAsTensorBuffer.floatArray
+        val classes = outputs.classesAsTensorBuffer.floatArray
+        val scores = outputs.scoresAsTensorBuffer.floatArray
+        val numberOfDetections = outputs.numberOfDetectionsAsTensorBuffer.floatArray
+
+        var mutable = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(mutable)
+
+        val h = mutable.height
+        val w = mutable.width
+        paint.textSize = h/35f
+        paint.strokeWidth = h/85f
+        var x = 0
+        scores.forEachIndexed{index, fl ->
+            x = index
+            x *= 4
+
+            if(fl > 0.5) {
+                paint.setColor(colors.get(index))
+                paint.style = Paint.Style.STROKE
+                canvas.drawRect(RectF(
+                    locations.get(x+1)*w,
+                    locations.get(x)*h,
+                    locations.get(x+3)*w,
+                    locations.get(x+2)*h),
+                    paint)
+                paint.style = Paint.Style.FILL
+                canvas.drawText(
+                    labels.get(classes.get(index).toInt()) + " " + fl.toString() ,
+                    locations.get(x+1)*w,
+                    locations.get(x)*h,
+                    paint)
             }
         }
-    }
-
-    @SuppressLint("MissingPermission")
-    fun open_camera() {
-        cameraManager.openCamera(
-            cameraManager.cameraIdList[0],
-            object: CameraDevice.StateCallback() {
-                override fun onOpened(camera: CameraDevice) {
-                    cameraDevice = camera
-                    capReq = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-                    var surface = Surface(textureView.surfaceTexture)
-                    capReq.addTarget(surface)
-
-                    cameraDevice.createCaptureSession(
-                        listOf(surface, imageReader.surface),
-                        object: CameraCaptureSession.StateCallback(){
-                            override fun onConfigured(session: CameraCaptureSession) {
-                                cameraCaptureSession = session
-                                cameraCaptureSession.setRepeatingRequest(capReq.build(), null, null)
-                            }
-
-                            override fun onConfigureFailed(session: CameraCaptureSession) {
-                                TODO("Not yet implemented")
-                            }
-                        },
-                        handler
-                    )
-                }
-
-                override fun onDisconnected(camera: CameraDevice) {
-
-                }
-
-                override fun onError(camera: CameraDevice, error: Int) {
-
-                }
-
-            },
-            handler
-        )
+        imageView.setImageBitmap(mutable)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        cameraDevice.close()
-        handler.removeCallbacksAndMessages(null)
-        handlerThread.quitSafely()
+        model.close()
     }
 }
